@@ -53,6 +53,41 @@ python -m rfsoc_ofdm install
 The notebook should now be available in the `rfsoc_ofdm` folder in your Jupyter Workspace.
 It is important that you use the Chrome web browser if possible as rendering performance is important.
 
+## Spectrum Analyser and Range-Doppler Map
+This adds two visualisations to the OFDM demonstrator. Both are software only and run on the existing bitstream of the v0.3.5 release (and v0.4.0), so no Vivado rebuild is needed:
+* **Spectrum analyser**: averaged power spectra (in dBFS) of the transmitted and received signals at the 20 MSPS baseband or the 240 MSPS wideband observation points.
+* **Range-Doppler map**: the OFDM signal is used as a radar waveform. The transmitter and receiver 20 MSPS streams are captured at the same time. The transmitted symbols are divided out of the received symbols on every sub-carrier, then an IFFT across sub-carriers (range) and an FFT across OFDM symbols (Doppler) are applied. A Doppler shift can be emulated by offsetting the DAC NCO.
+
+### Installing on a board that already runs v0.3.5 (or v0.4.0)
+Open a terminal in Jupyter Lab and run:
+
+```sh
+git clone -b claude/adoring-cerf-l8376v https://github.com/riguwen/rfsoc_ofdm3.git /tmp/rfsoc_ofdm_sensing
+PKG=$(python3 -c "import os, rfsoc_ofdm; print(os.path.dirname(rfsoc_ofdm.__file__))")
+SRC=/tmp/rfsoc_ofdm_sensing/rfsoc_ofdm
+cp $SRC/radar.py $SRC/sensing.py $SRC/sdr_plots.py $SRC/inspector.py $SRC/overlay.py $PKG/
+cp $SRC/notebooks/02_rfsoc_ofdm_demonstrator.ipynb $PKG/notebooks/
+cp $SRC/notebooks/02_rfsoc_ofdm_demonstrator.ipynb $PYNQ_JUPYTER_NOTEBOOKS/rfsoc_ofdm/
+```
+
+Only copy the files listed above. In particular, keep the installed `ofdm.py`: it names the OFDM IP version of the installed bitstream (v0.4 IP for release v0.3.5, v0.5 IP for release v0.4.0). The last command replaces notebook `02_rfsoc_ofdm_demonstrator.ipynb` in your Jupyter workspace, so back it up first if you have changed it. Restart the kernel of any open OFDM notebook afterwards.
+
+### Usage
+Notebook `02_rfsoc_ofdm_demonstrator.ipynb` has new *Spectrum Analyser* and *Range-Doppler Map* sections, and the Voila dashboard (notebook 03) has a *Range-Doppler* tab. From Python:
+
+```python
+from rfsoc_ofdm.overlay import Overlay
+ofdm_hw = Overlay()
+
+ofdm_hw.spectrum_application()        # live transmit/receive spectrum widget
+ofdm_hw.range_doppler_application()   # live range-Doppler map widget
+
+result = ofdm_hw.range_doppler.measure()   # one map as numpy arrays
+ofdm_hw.range_doppler.set_nco_offset(10e3) # emulate a +10 kHz Doppler shift
+```
+
+Zero range is the strongest received path (the loopback cable or the direct antenna path), because the start times of the transmit and receive captures differ by an unknown few microseconds. At 20 MSPS one range bin is 7.5 m, the cyclic prefix covers about 90 m, and 256 OFDM symbols give a Doppler resolution of 977 Hz (244 m/s at 600 MHz). The signal processing is in `rfsoc_ofdm/radar.py` and only needs numpy, so it can also process saved captures, or synthetic ones from `radar.simulate_capture`, on a PC.
+
 ## Using the Project Files
 The following software is required to use the project files in this repository.
 - Vivado Design Suite 2020.2

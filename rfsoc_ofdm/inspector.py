@@ -7,6 +7,7 @@ from pynq import DefaultHierarchy
 from pynq import allocate
 import numpy as np
 import math
+import threading
 from .quick_widgets import DropDown
 from .sdr_plots import TimePlot, ConstellationPlot, SpectrumAnalyser
 from .dma_timer import DmaTimer
@@ -16,6 +17,10 @@ class Inspector(DefaultHierarchy):
     
     def __init__(self, description, plotting_rate = 0.4, autoscale = False, init_data = False, sample_freq = 20e6):
         super().__init__(description)
+        
+        # Serialises access to the DMA, switch and packet controller so that
+        # several plots (or a simultaneous capture) can share this inspector.
+        self._lock = threading.RLock()
         
         self.data_inspector_module.packetsize = 64
         self.data_inspector_module.enable = 0
@@ -28,7 +33,7 @@ class Inspector(DefaultHierarchy):
         if init_data:
             self._data = self.get_frame()
         else:
-            self._data = np.zeros(self.data_inspector_module.packetsize, dtype=np.complex)
+            self._data = np.zeros(self.data_inspector_module.packetsize, dtype=complex)
             
         self._t_plot = TimePlot(self._data, animation_period=0)
         self._c_plot = ConstellationPlot(self._data, animation_period=0)
@@ -47,26 +52,28 @@ class Inspector(DefaultHierarchy):
         and then allocating a new buffer with the given tuple. Obtain the
         tuple product to set the packetsize of the data_inspector_module.
         """
-        self.buffer.freebuffer()
-        lshape = list(shape)
-        lshape[0] = lshape[0] * 2
-        tshape = tuple(lshape)
-        self.buffer = allocate(shape=tshape, dtype=np.int16)       
-        product = 1 
-        for i in shape:  
-            product *= i
-        self.data_inspector_module.packetsize = product
+        with self._lock:
+            self.buffer.freebuffer()
+            lshape = list(shape)
+            lshape[0] = lshape[0] * 2
+            tshape = tuple(lshape)
+            self.buffer = allocate(shape=tshape, dtype=np.int16)       
+            product = 1 
+            for i in shape:  
+                product *= i
+            self.data_inspector_module.packetsize = product
         
     def get_frame(self):
         """Get a single buffer of time data from the logic fabric
         """
-        self.data_inspector_module.reset = 0
-        self.axi_dma.recvchannel.transfer(self.buffer)
-        self.data_inspector_module.enable = 1
-        self.axi_dma.recvchannel.wait()
-        self.data_inspector_module.enable = 0
-        self.data_inspector_module.reset = 1
-        t_data = np.array(self.buffer) * 2**-14
+        with self._lock:
+            self.data_inspector_module.reset = 0
+            self.axi_dma.recvchannel.transfer(self.buffer)
+            self.data_inspector_module.enable = 1
+            self.axi_dma.recvchannel.wait()
+            self.data_inspector_module.enable = 0
+            self.data_inspector_module.reset = 1
+            t_data = np.array(self.buffer) * 2**-14
         c_data = t_data[::2] + 1j * t_data[1::2]
         if self._autoscale:
             return self._scale_data(c_data)
@@ -142,10 +149,11 @@ class DualChannelInspector(Inspector):
         
     @channel_switch.setter
     def channel_switch(self, channel):
-        self.axis_switch.write(0x40, int(channel))
-        self.update_switch()
+        with self._lock:
+            self.axis_switch.write(0x40, int(channel))
+            self.update_switch()
+            self._current_channel = channel
         self.channel_widget.value = channel
-        self._current_channel = channel
         self.set_frequency(self._sample_freq[channel])
         
     @staticmethod

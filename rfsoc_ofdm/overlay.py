@@ -9,6 +9,7 @@ import xrfclk
 from rfsoc_ofdm import inspector
 from rfsoc_ofdm import ofdm
 from rfsoc_ofdm import clocks
+from rfsoc_ofdm import sensing
 
 class Overlay(Overlay):
     """
@@ -74,6 +75,47 @@ class Overlay(Overlay):
 
         self.configure_inspectors()    
         self.start_constellation()
+
+        self._spectrum_analyser = None
+        self._range_doppler = None
+
+
+    @property
+    def spectrum_analyser(self):
+        """Averaged transmit/receive spectrum application (created on first use).
+        """
+        if self._spectrum_analyser is None:
+            try:
+                self._spectrum_analyser = sensing.SpectrumApplication(self)
+            except AttributeError as err:
+                # Re-raise so Overlay.__getattr__ does not hide the error
+                raise RuntimeError(str(err)) from err
+        return self._spectrum_analyser
+
+
+    @property
+    def range_doppler(self):
+        """Range-Doppler (OFDM radar) application (created on first use).
+        """
+        if self._range_doppler is None:
+            try:
+                self._range_doppler = sensing.RangeDopplerApplication(self)
+            except AttributeError as err:
+                # Re-raise so Overlay.__getattr__ does not hide the error
+                raise RuntimeError(str(err)) from err
+        return self._range_doppler
+
+
+    def spectrum_application(self):
+        """Return a widget showing the transmit and receive power spectra.
+        """
+        return self.spectrum_analyser.get_widget()
+
+
+    def range_doppler_application(self, compact=False):
+        """Return a widget showing a live range-Doppler map.
+        """
+        return self.range_doppler.get_widget(compact=compact)
 
 
     def start_constellation(self):
@@ -167,6 +209,7 @@ class Overlay(Overlay):
         constellation_ch = ipw.VBox([self.inspectors['constellation'].constellation_plot(),
                                      ipw.HBox([self.ofdm_transmitter.modulation_dropdown.get_widget(),
                                                self.inspectors['constellation'].plot_control()])])
+        range_doppler_ch = self.range_doppler_application(compact=True)
         
         # Create tab for inspection plots
         insp_tab_ch = [transmit_chfreq, transmit_chtime, receive_chfreq, receive_chtime]
@@ -177,10 +220,10 @@ class Overlay(Overlay):
         insp_tab.selected_index = 2
 
         # Create tab for demodulation inspection (constellation plot)
-        iq_tab_ch = [constellation_ch]
+        iq_tab_ch = [constellation_ch, range_doppler_ch]
         iq_tab = ipw.Tab()
         iq_tab.children = iq_tab_ch
-        titles = ['Constellation']
+        titles = ['Constellation', 'Range-Doppler']
         [iq_tab.set_title(i, title) for i, title in enumerate(titles)]
 
         # Configure application to launch with the following defaults

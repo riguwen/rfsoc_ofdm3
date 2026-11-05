@@ -242,3 +242,168 @@ class ConstellationPlot():
     def get_widget(self):
         return self._plot
     
+
+class PowerSpectrumPlot():
+    """Averaged power spectrum of several signals (e.g. transmit and receive)."""
+
+    def __init__(self,
+                 names=('Transmit', 'Receive'),
+                 width=800,
+                 height=500,
+                 yrange=(-120, 0)):
+        self._names = list(names)
+        self._plot = go.FigureWidget(
+            layout={
+                'height' : height,
+                'width' : width,
+                'uirevision' : 'spectrum',
+                'xaxis' : {'title' : 'Frequency Offset (MHz)'},
+                'yaxis' : {'title' : 'Power (dBFS per bin)',
+                           'range' : list(yrange)},
+                'title' : 'Power Spectrum',
+                'legend' : {'x' : 0.99, 'xanchor' : 'right', 'y' : 0.99},
+            },
+            data=[{'type' : 'scatter',
+                   'mode' : 'lines',
+                   'name' : name,
+                   'x' : [0],
+                   'y' : [yrange[0]]} for name in self._names])
+
+    def update_data(self, traces, title=None):
+        """Update the plot.
+
+        traces: dict mapping a trace name to ``(freq_hz, power_db)`` or None
+        to hide the trace.
+        """
+        with self._plot.batch_update():
+            for trace in self._plot.data:
+                data = traces.get(trace.name)
+                if data is None:
+                    trace.visible = False
+                    continue
+                freq, power = data
+                trace.x = np.asarray(freq) * 1e-6
+                trace.y = power
+                trace.visible = True
+            if title is not None:
+                self._plot.layout.title = title
+
+    def set_yrange(self, yrange):
+        self._plot.layout.yaxis.range = list(yrange)
+
+    def get_widget(self):
+        return self._plot
+
+
+class RangeDopplerPlot():
+    """Heatmap of a range-Doppler map (see rfsoc_ofdm.radar.OFDMRadar)."""
+
+    def __init__(self,
+                 width=600,
+                 height=500,
+                 dynamic_range=60,
+                 colorscale='Viridis'):
+        self._dynamic_range = dynamic_range
+        self._plot = go.FigureWidget(
+            layout={
+                'height' : height,
+                'width' : width,
+                'uirevision' : 'range-doppler',
+                'xaxis' : {'title' : 'Doppler (kHz)'},
+                'yaxis' : {'title' : 'Range (m)'},
+                'title' : 'Range-Doppler Map',
+            },
+            data=[{'type' : 'heatmap',
+                   'x' : [0],
+                   'y' : [0],
+                   'z' : [[-dynamic_range]],
+                   'zmin' : -dynamic_range,
+                   'zmax' : 0,
+                   'colorscale' : colorscale,
+                   'colorbar' : {'title' : 'dB'}}])
+
+    def set_dynamic_range(self, dynamic_range):
+        self._dynamic_range = dynamic_range
+        self._plot.data[0].zmin = -dynamic_range
+
+    def update_data(self, result, max_range=None, min_range=None,
+                    max_doppler=None, units='doppler', title=None):
+        """Draw a RangeDopplerResult.
+
+        max_range, min_range: range limits in metres.
+        max_doppler: Doppler limit (absolute value) in Hz.
+        units: 'doppler' (kHz) or 'velocity' (m/s) for the Doppler axis.
+        """
+        rng = result.range_m
+        r_sel = np.ones(len(rng), dtype=bool)
+        if max_range is not None:
+            r_sel &= rng <= max_range
+        if min_range is not None:
+            r_sel &= rng >= min_range
+        d_sel = np.ones(len(result.doppler_hz), dtype=bool)
+        if max_doppler is not None:
+            d_sel &= np.abs(result.doppler_hz) <= max_doppler
+        if not np.any(d_sel):
+            d_sel[np.argmin(np.abs(result.doppler_hz))] = True
+        if units == 'velocity':
+            x = result.velocity_mps[d_sel]
+            xtitle = 'Radial Velocity (m/s)'
+        else:
+            x = result.doppler_hz[d_sel] * 1e-3
+            xtitle = 'Doppler (kHz)'
+        z = np.maximum(result.rd_map_db[np.ix_(d_sel, r_sel)].T,
+                       -self._dynamic_range).astype(np.float32)
+        with self._plot.batch_update():
+            heatmap = self._plot.data[0]
+            heatmap.x = x
+            heatmap.y = rng[r_sel]
+            heatmap.z = z
+            heatmap.zmin = -self._dynamic_range
+            self._plot.layout.xaxis.title = xtitle
+            if title is not None:
+                self._plot.layout.title = title
+
+    def get_widget(self):
+        return self._plot
+
+
+class RangeProfilePlot():
+    """Range profile (power against range) at the Doppler bin of the peak."""
+
+    def __init__(self,
+                 width=400,
+                 height=500,
+                 dynamic_range=60):
+        self._plot = go.FigureWidget(
+            layout={
+                'height' : height,
+                'width' : width,
+                'uirevision' : 'range-profile',
+                'xaxis' : {'title' : 'Power (dB)',
+                           'range' : [-dynamic_range, 3]},
+                'yaxis' : {'title' : 'Range (m)'},
+                'title' : 'Range Profile',
+                'showlegend' : False,
+            },
+            data=[{'type' : 'scatter',
+                   'mode' : 'lines',
+                   'name' : 'Range Profile',
+                   'x' : [-dynamic_range],
+                   'y' : [0]}])
+
+    def set_dynamic_range(self, dynamic_range):
+        self._plot.layout.xaxis.range = [-dynamic_range, 3]
+
+    def update_data(self, result, max_range=None, min_range=None):
+        rng = result.range_m
+        sel = np.ones(len(rng), dtype=bool)
+        if max_range is not None:
+            sel &= rng <= max_range
+        if min_range is not None:
+            sel &= rng >= min_range
+        with self._plot.batch_update():
+            self._plot.data[0].x = result.range_profile_db[sel]
+            self._plot.data[0].y = rng[sel]
+
+    def get_widget(self):
+        return self._plot
